@@ -11,3 +11,4 @@ timm
 diffusers
 geomloss
 umap-learn
+wandb

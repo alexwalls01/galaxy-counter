@@ -18,6 +18,11 @@ dependencies = [
   "matplotlib",
   "tqdm",
   "astropy",
+  "timm",
+  "diffusers",
+  "geomloss",
+  "umap-learn",
+  "wandb",
 ]
 
 [tool.setuptools]
