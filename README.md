@@ -33,8 +33,10 @@ This is a one-time step per environment. After this, all scripts and SLURM jobs 
 ## Common commands
 ```bash
 # Data preparation (run once before training)
-python scripts/save_neighbor_shards.py   # pre-bake NeighborsDataset into HDF5 shards
-python scripts/merge_neighbor_shards.py  # merge shards into train/val Virtual Datasets
+# pre-bake NeighborsDataset into HDF5 shards (see --help for batch size, workers, etc.)
+python scripts/save_neighbor_shards.py --source-h5 /path/to/neighbours.h5 --output-dir /path/to/neighbor_batches
+# merge shards into train/val Virtual Datasets (written next to the shards by default)
+python scripts/merge_neighbor_shards.py --input-dir /path/to/neighbor_batches
 
 # Training and evaluation
 scripts/run_neighbors_train.sh

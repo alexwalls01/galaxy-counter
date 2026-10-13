@@ -144,12 +144,15 @@ In our case reading the h5 file back and forth according to the neighbor indexes
 Reading raw images and preprocessing on-the-fly is a bottleneck at scale.
 If you have a large dataset, pre-bake the preprocessed batches into shards:
 
-1. Edit the configuration block at the top of `scripts/save_neighbor_shards.py`
-   (set `SOURCE_H5`, `OUTPUT_DIR`, `BATCH_SIZE`, `MAX_NEIGHBORS`) then run:
+1. Run `scripts/save_neighbor_shards.py`, pointing it at the HDF5 file built in Step 3:
 
    ```bash
-   python scripts/save_neighbor_shards.py
+   python scripts/save_neighbor_shards.py \
+       --source-h5 /path/to/neighbours.h5 --output-dir /path/to/neighbor_batches
    ```
+
+   `--batch-size` (default 64), `--num-workers` (8), `--chunks-per-file` (50) and
+   `--max-neighbors` (5, must match the file) are optional; see `--help`.
 
    This iterates through your `NeighborsDataset` with multiple DataLoader workers
    and writes compressed HDF5 shard files.  Each shard stores:
@@ -161,18 +164,24 @@ If you have a large dataset, pre-bake the preprocessed batches into shards:
    f['neighbor_masks']  # (N, K)  bool
    ```
 
+   When every shard is written it also writes `shards_complete.json`. It refuses to
+   write into a directory that already holds shards unless you pass `--overwrite`
+   (which deletes them first), so shards from different runs are never mixed.
+
    If the run crashes, the current buffer is saved as a `_recovery.h5` file so
    you do not lose progress.
 
 2. Merge the shards into HDF5 Virtual Datasets (thin index files, no data copy):
 
    ```bash
-   python scripts/merge_neighbor_shards.py
+   python scripts/merge_neighbor_shards.py --input-dir /path/to/neighbor_batches
    ```
 
-   Edit `INPUT_DIR` and `OUTPUT_DIR` at the top of the script first.  This
-   produces `train_neighbors.vds` (all shards except the last) and
-   `val_neighbors.vds` (last shard).
+   This produces `train_neighbors.vds` (all shards except the last) and
+   `val_neighbors.vds` (last shard), next to the shards unless you pass
+   `--output-dir`. It needs at least 2 shards, skips any `_recovery.h5` files, and
+   warns if `shards_complete.json` is missing. The VDS files point at the shards
+   by path, so keep the shards where they are.
 
 3. Point `GALAXY_COUNTER_PRECOMPUTED_H5` at the train VDS file and use
    `NeighborsPrecomputedDataset` in the training script.

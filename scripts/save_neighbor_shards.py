@@ -7,18 +7,23 @@ After running this script, combine the shards with merge_neighbor_shards.py.
 
 Usage
 -----
-Edit the four constants in the "Configuration" block below, then run:
+    python scripts/save_neighbor_shards.py \
+        --source-h5 /path/to/neighbours.h5 --output-dir /path/to/neighbor_batches
 
-    python scripts/save_neighbor_shards.py
-
-The script will create OUTPUT_DIR if it does not exist and write files named
+The script will create the output directory if it does not exist and write files named
     neighbors_shard_0000.h5, neighbors_shard_0001.h5, …
+plus shards_complete.json once every shard has been written. It refuses to write into a
+directory that already holds shards unless --overwrite is given (which deletes them first),
+so shards from different runs are never mixed.
 
 If the run crashes mid-way the current buffer is saved as
     neighbors_shard_XXXX_recovery.h5
 so you do not lose progress.
 """
 
+import argparse
+import glob
+import json
 import os
 import sys
 import traceback
@@ -32,20 +37,8 @@ from tqdm import tqdm
 
 from galaxy_counter.neighbors import NeighborsDataset, collate_neighbors
 
-# ---------------------------------------------------------------------------
-# Configuration — edit these for your dataset
-#
-# To try this on the HSC × Legacy Survey dataset this repo was built on, use:
-#   SOURCE_H5 = "/work1/jeroenaudenaert/pablomer/data/neighbours_v2.h5"
-#   OUTPUT_DIR = "/work1/jeroenaudenaert/pablomer/data/neighbor_batches"
-# ---------------------------------------------------------------------------
-SOURCE_H5 = "/path/to/neighbours.h5"          # HDF5 built in Step 3
-OUTPUT_DIR = "/path/to/neighbor_batches"       # directory for output shards
-BATCH_SIZE = 64
-NUM_WORKERS = 8      # increase for faster random-read throughput
-CHUNKS_PER_FILE = 50 # batches per shard (~3200 samples at batch_size=64)
-MAX_NEIGHBORS = 5    # must match the value used when building SOURCE_H5
-# ---------------------------------------------------------------------------
+SHARD_GLOB = "neighbors_shard_*.h5"
+COMPLETE_MARKER = "shards_complete.json"
 
 
 def save_shard(shard_idx, buffer, save_dir, global_max_neighbors):
@@ -97,49 +90,88 @@ def save_shard(shard_idx, buffer, save_dir, global_max_neighbors):
         f.create_dataset("meta_survey",                data=meta_survey)
 
 
-def main():
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+def prepare_output_dir(output_dir, overwrite):
+    """Create output_dir; refuse (or with overwrite, clear) shards left by a previous run."""
+    os.makedirs(output_dir, exist_ok=True)
+    old = sorted(glob.glob(os.path.join(output_dir, SHARD_GLOB)))
+    marker = os.path.join(output_dir, COMPLETE_MARKER)
+    if not old and not os.path.exists(marker):
+        return
+    if not overwrite:
+        sys.exit(f"{output_dir} already contains {len(old)} shard file(s) from a previous run; "
+                 "use --overwrite to replace them, or choose another --output-dir.")
+    print(f"--overwrite: deleting {len(old)} existing shard file(s) in {output_dir}")
+    for path in old + ([marker] if os.path.exists(marker) else []):
+        os.remove(path)
 
-    dataset = NeighborsDataset(hdf5_path=SOURCE_H5, max_neighbors=MAX_NEIGHBORS)
+
+def parse_args():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--source-h5", required=True,
+                        help="Neighbours HDF5 read by NeighborsDataset (images_*, neighbor_idx_*, source_type)")
+    parser.add_argument("--output-dir", required=True, help="Directory for the output shards")
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--num-workers", type=int, default=8, help="Increase for faster random-read throughput")
+    parser.add_argument("--chunks-per-file", type=int, default=50,
+                        help="Batches per shard (~3200 samples at batch size 64)")
+    parser.add_argument("--max-neighbors", type=int, default=5,
+                        help="Must match the number of neighbours stored in --source-h5")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="Delete shards already in --output-dir before writing")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    prepare_output_dir(args.output_dir, args.overwrite)
+
+    dataset = NeighborsDataset(hdf5_path=args.source_h5, max_neighbors=args.max_neighbors)
     dataloader = DataLoader(
         dataset,
-        batch_size=BATCH_SIZE,
+        batch_size=args.batch_size,
         shuffle=False,
-        num_workers=NUM_WORKERS,
+        num_workers=args.num_workers,
         collate_fn=collate_neighbors,
         drop_last=False,
-        persistent_workers=NUM_WORKERS > 0,
+        persistent_workers=args.num_workers > 0,
         pin_memory=True,
     )
 
     buffer        = []
     shard_counter = 0
+    n_samples     = 0
 
     print(f"Starting at {datetime.now().isoformat()}")
-    print(f"Output: {OUTPUT_DIR} | total batches: {len(dataloader)}")
+    print(f"Output: {args.output_dir} | total batches: {len(dataloader)}")
 
     try:
         for batch in tqdm(dataloader):
             buffer.append(batch)
-            if len(buffer) >= CHUNKS_PER_FILE:
-                save_shard(shard_counter, buffer, OUTPUT_DIR, dataset.max_neighbors)
+            n_samples += len(batch[0])
+            if len(buffer) >= args.chunks_per_file:
+                save_shard(shard_counter, buffer, args.output_dir, dataset.max_neighbors)
                 buffer = []
                 shard_counter += 1
 
         if buffer:
-            save_shard(shard_counter, buffer, OUTPUT_DIR, dataset.max_neighbors)
+            save_shard(shard_counter, buffer, args.output_dir, dataset.max_neighbors)
 
         total_shards = shard_counter + (1 if buffer else 0)
         print(f"Done at {datetime.now().isoformat()} | wrote {total_shards} shards.")
+
+        # Written last, so its presence means every shard is complete
+        with open(os.path.join(args.output_dir, COMPLETE_MARKER), "w") as f:
+            json.dump({"num_shards": total_shards, "num_samples": n_samples,
+                       "finished": datetime.now().isoformat(), **vars(args)}, f, indent=2)
 
     except Exception as e:
         if buffer:
             print(f"Error: {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
             print("Saving buffered batches to recovery shard ...", file=sys.stderr)
-            save_shard(shard_counter, buffer, OUTPUT_DIR, dataset.max_neighbors)
-            normal_path   = os.path.join(OUTPUT_DIR, f"neighbors_shard_{shard_counter:04d}.h5")
-            recovery_path = os.path.join(OUTPUT_DIR, f"neighbors_shard_{shard_counter:04d}_recovery.h5")
+            save_shard(shard_counter, buffer, args.output_dir, dataset.max_neighbors)
+            normal_path   = os.path.join(args.output_dir, f"neighbors_shard_{shard_counter:04d}.h5")
+            recovery_path = os.path.join(args.output_dir, f"neighbors_shard_{shard_counter:04d}_recovery.h5")
             os.rename(normal_path, recovery_path)
             print(f"Recovery shard saved: {recovery_path}", file=sys.stderr)
         raise

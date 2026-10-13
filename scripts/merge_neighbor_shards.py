@@ -8,30 +8,30 @@ underlying shards.
 
 Usage
 -----
-Edit the constants in the "Configuration" block below, then run:
-
-    python scripts/merge_neighbor_shards.py
+    python scripts/merge_neighbor_shards.py --input-dir /path/to/neighbor_batches
 
 Outputs
 -------
-    OUTPUT_DIR/train_neighbors.vds   — all shards except the last
-    OUTPUT_DIR/val_neighbors.vds     — last shard only
+    <output-dir>/train_neighbors.vds   — all shards except the last
+    <output-dir>/val_neighbors.vds     — last shard only
+(--output-dir defaults to --input-dir.)
 
+Recovery shards (*_recovery.h5) left by a crashed save_neighbor_shards.py run are
+skipped: rerun that script instead, so no samples are duplicated.
+
+The VDS files point at the shards by path, so keep the shards where they are.
 Point GALAXY_COUNTER_PRECOMPUTED_H5 at the train VDS for training.
 """
 
+import argparse
 import glob
 import os
 
 import h5py
 from tqdm import tqdm
 
-# ---------------------------------------------------------------------------
-# Configuration — edit these for your dataset
-# ---------------------------------------------------------------------------
-INPUT_DIR  = "/path/to/neighbor_batches"  # directory with shard files
-OUTPUT_DIR = "/path/to/data"              # where to write the VDS files
-# ---------------------------------------------------------------------------
+SHARD_GLOB = "neighbors_shard_*.h5"
+COMPLETE_MARKER = "shards_complete.json"   # written by save_neighbor_shards.py when it finishes
 
 
 def create_vds(files, output_path):
@@ -73,18 +73,33 @@ def create_vds(files, output_path):
 
 
 def main():
-    files = sorted(glob.glob(os.path.join(INPUT_DIR, "neighbors_shard_*.h5")))
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--input-dir", required=True, help="Directory with the shard files")
+    parser.add_argument("--output-dir", default=None, help="Where to write the VDS files (default: --input-dir)")
+    args = parser.parse_args()
+    output_dir = args.output_dir or args.input_dir
+
+    files = sorted(glob.glob(os.path.join(args.input_dir, SHARD_GLOB)))
+    recovery = [f for f in files if f.endswith("_recovery.h5")]
+    files = [f for f in files if not f.endswith("_recovery.h5")]
+    if recovery:
+        print(f"WARNING: skipping {len(recovery)} recovery shard(s) from a crashed run: {recovery}")
     if not files:
-        raise FileNotFoundError(f"No shard files found in {INPUT_DIR}")
+        raise FileNotFoundError(f"No shard files found in {args.input_dir}")
+    if not os.path.exists(os.path.join(args.input_dir, COMPLETE_MARKER)):
+        print(f"WARNING: no {COMPLETE_MARKER} in {args.input_dir}; save_neighbor_shards.py may not have finished")
 
     print(f"Found {len(files)} shards.")
+    if len(files) < 2:
+        raise SystemExit("Need at least 2 shards (all but the last for training, the last for validation); "
+                         "rerun save_neighbor_shards.py with a smaller --chunks-per-file.")
 
     train_files = files[:-1]
     val_files   = files[-1:]
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    create_vds(train_files, os.path.join(OUTPUT_DIR, "train_neighbors.vds"))
-    create_vds(val_files,   os.path.join(OUTPUT_DIR, "val_neighbors.vds"))
+    os.makedirs(output_dir, exist_ok=True)
+    create_vds(train_files, os.path.join(output_dir, "train_neighbors.vds"))
+    create_vds(val_files,   os.path.join(output_dir, "val_neighbors.vds"))
 
 
 if __name__ == "__main__":
