@@ -114,7 +114,10 @@ class ConditionalFlowMatchingModule(pl.LightningModule):
         num_mse_images: int = 64, # number of examples cached for MSE tracking
         num_integration_steps: int = 500,
         lambda_generative: float = 1.0, # weight for generative loss
-        lambda_geometric: float = 0.3, # weight for geometric loss
+        # Weight for the geometric loss, which passes the anchor (x_1) through
+        # encoder_1. train/neighbours_train.py sets this to 0.0 (the paper's configuration),
+        # so the 0.3 default only applies if the model is constructed elsewhere.
+        lambda_geometric: float = 0.3,
         num_umap_batches: int = 8, # number of validation batches to collect for UMAP visualization
         mask_center: bool = False, # if true -> mask the center of the image
     ):
