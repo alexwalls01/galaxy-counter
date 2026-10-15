@@ -29,6 +29,7 @@ This is a one-time step per environment. After this, all scripts and SLURM jobs 
 - `GALAXY_COUNTER_NEIGHBORS_H5`: neighbors HDF5 path
 - `GALAXY_COUNTER_PRECOMPUTED_H5`: precomputed neighbor batches HDF5 path
 - `GALAXY_COUNTER_CHECKPOINT_DIR`: output checkpoint directory
+- `GALAXY_COUNTER_FIGURES_DIR`: where neighbours training saves its latent-space UMAP figures (default `./figures`)
 
 ## Common commands
 ```bash

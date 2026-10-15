@@ -5,6 +5,7 @@ import wandb
 import timm
 import time
 import sys
+import os
 import shutil
 import datetime
 from pathlib import Path
@@ -782,8 +783,10 @@ class ConditionalFlowMatchingModule(pl.LightningModule):
             if mse_legacy is not None:
                 self.log("val/mse_legacy", mse_legacy, sync_dist=True)
 
-        # Generate UMAP visualization if we collected enough batches
-        if (hasattr(self, '_umap_hsc_batches') and hasattr(self, '_umap_legacy_batches') and
+        # Generate UMAP visualization if we collected enough batches. Only rank 0 logs, and every rank
+        # would otherwise save the same PNG at once, so rank 0 can upload a half-written file
+        if (self.trainer.is_global_zero and
+            hasattr(self, '_umap_hsc_batches') and hasattr(self, '_umap_legacy_batches') and
             len(self._umap_hsc_batches) > 0 and len(self._umap_legacy_batches) > 0):
             try:
                 # Concatenate all collected batches
@@ -833,8 +836,8 @@ class ConditionalFlowMatchingModule(pl.LightningModule):
         all_embeddings_1 = torch.concat([hsc_embeddings_1, legacy_embeddings_1], dim=0)  # (B_total, seq_len, embed_dim)
         all_embeddings_2 = torch.concat([hsc_embeddings_2, legacy_embeddings_2], dim=0)  # (B_total, seq_len, embed_dim)
 
-        # Create figures directory
-        figures_dir = Path.cwd() / "figures"
+        # Create figures directory (GALAXY_COUNTER_FIGURES_DIR, default ./figures)
+        figures_dir = Path(os.getenv("GALAXY_COUNTER_FIGURES_DIR", Path.cwd() / "figures"))
         figures_dir.mkdir(parents=True, exist_ok=True)
 
         # UMAP parameters (n_jobs=1 avoids "overridden to 1" warning when random_state is set)
